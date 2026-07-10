@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CrowdLens - Price ad space by who actually sees it</title>
+<meta name="description" content="CrowdLens turns CCTV and venue sensor data into zone by zone, hour by hour traffic estimates so ad agencies can price placements on real footfall, not guesswork." />
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@700,500&f[]=general-sans@400,500,600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#040404; --surface:rgba(255,255,255,0.045); --ink:#F5F5F3; --ink-muted:#8B8B8F;
+  --border:rgba(255,255,255,0.13); --lo:rgba(255,255,255,0.35); --mid:rgba(255,255,255,0.65); --hi:#FFFFFF;
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{background:var(--bg); color:var(--ink); font-family:'General Sans','Inter',sans-serif; -webkit-font-smoothing:antialiased; overflow-x:hidden;}
+.font-display{font-family:'Cabinet Grotesk','General Sans',sans-serif; font-weight:700;}
+/* Replaces the monospace label style with tracked-out General Sans - reads as a system, not a "tech demo" font */
+.label{font-family:'General Sans','Inter',sans-serif; font-weight:600; letter-spacing:0.14em; text-transform:uppercase; font-size:0.72rem; color:var(--ink-muted);}
+.stat-mono{font-family:'General Sans','Inter',sans-serif; font-weight:500; font-feature-settings:"tnum";}
+.emphasis{font-weight:700; color:var(--hi);}
+
+#gradient-canvas{position:fixed; inset:0; width:100%; height:100%; z-index:-2;}
+.grain{position:fixed; inset:0; z-index:-1; opacity:0.045; pointer-events:none; mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+.vignette{position:fixed; inset:0; z-index:-1; pointer-events:none; background:radial-gradient(ellipse at center, transparent 35%, rgba(0,0,0,0.65) 100%);}
+
+.glass{background:var(--surface); border:1px solid var(--border); backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);}
+
+header .glass{transition:backdrop-filter 0.4s ease, background 0.4s ease, box-shadow 0.4s ease;}
+header.scrolled .glass{backdrop-filter:blur(24px); -webkit-backdrop-filter:blur(24px); background:rgba(10,10,10,0.6); box-shadow:0 8px 30px rgba(0,0,0,0.35);}
+
+.btn-primary{background:var(--hi); color:#050505; transition:background .25s ease, color .25s ease, transform .2s ease;}
+.btn-primary:hover{background:transparent; color:var(--hi); box-shadow:inset 0 0 0 1px var(--hi);}
+.btn-secondary{transition:border-color .25s ease, background .25s ease;}
+.btn-secondary:hover{border-color:rgba(255,255,255,0.5); background:rgba(255,255,255,0.05);}
+
+.spot{position:relative; overflow:hidden; transition:transform .3s ease, border-color .3s ease;}
+.spot::before{content:"";position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .3s ease;
+  background:radial-gradient(320px circle at var(--mx,50%) var(--my,50%), rgba(255,255,255,0.10), transparent 70%);}
+.spot:hover::before{opacity:1;}
+.spot:hover{transform:translateY(-3px); border-color:rgba(255,255,255,0.3);}
+
+/* Hero-only entrance: slow, soft blur-to-focus (Linear-style), no bounce, no scale */
+.reveal{opacity:0; filter:blur(14px); transform:translateY(10px); transition:opacity 1.8s cubic-bezier(0.16,1,0.3,1), filter 1.8s cubic-bezier(0.16,1,0.3,1), transform 1.8s cubic-bezier(0.16,1,0.3,1);}
+.reveal.in{opacity:1; filter:blur(0); transform:translateY(0);}
+
+/* Hero screenshot: cinematic mask-wipe reveal on load */
+.shot-wrap{position:relative; opacity:0; filter:blur(18px); transform:translateY(36px) scale(0.98); transition:opacity 2.4s cubic-bezier(0.16,1,0.3,1), filter 2.4s cubic-bezier(0.16,1,0.3,1), transform 2.4s cubic-bezier(0.16,1,0.3,1);}
+.shot-wrap.in{opacity:1; filter:blur(0); transform:translateY(0) scale(1);}
+
+.pulse-dot{animation:pulse 1.6s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.5;transform:scale(.8);}}
+
+@media (prefers-reduced-motion: reduce){
+  .pulse-dot{animation:none;}
+  .reveal,.shot-wrap{transition:none; opacity:1; filter:none; transform:none;}
+}
+::selection{background:var(--hi); color:#050505;}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
+</style>
+</head>
+<body class="antialiased">
+
+<canvas id="gradient-canvas"></canvas>
+<div class="grain"></div>
+<div class="vignette"></div>
+
+<!-- NAV -->
+<header class="fixed top-0 left-0 right-0 z-50">
+  <div class="max-w-6xl mx-auto px-6 mt-4">
+    <div class="glass rounded-full h-14 flex items-center justify-between px-4">
+      <a href="#top" class="flex items-center">
+        <img src="assets/CLDarkModeLogo.png" alt="CrowdLens" class="h-20 w-auto -ml-3" loading="eager" decoding="async" width="44" height="44" />
+      </a>
+      <nav class="hidden md:flex items-center gap-8 text-sm text-[var(--ink-muted)]">
+        <a href="#how" class="hover:text-white transition-colors">How it works</a>
+        <a href="#product" class="hover:text-white transition-colors">Product</a>
+        <a href="#pricing-curve" class="hover:text-white transition-colors">Pricing curve</a>
+        <a href="#privacy" class="hover:text-white transition-colors">Privacy</a>
+      </nav>
+      <a href="#demo" class="btn-primary text-sm font-medium px-4 py-2 rounded-full">Book a demo</a>
+    </div>
+  </div>
+</header>
+
+<!-- HERO -->
+<section id="top" class="pt-40 pb-24 px-6">
+  <div class="max-w-5xl mx-auto">
+    <div class="max-w-2xl">
+      <p class="label mb-5 reveal" style="transition-delay:0ms;">For ad agencies &amp; venue media owners</p>
+      <h1 class="font-display text-4xl sm:text-6xl font-medium leading-[1.06] tracking-tight reveal" style="transition-delay:180ms;">
+        Price ad space by who <span class="emphasis">actually walks past it.</span>
+      </h1>
+      <p class="mt-6 text-lg text-[var(--ink-muted)] leading-relaxed max-w-lg reveal" style="transition-delay:380ms;">
+        CrowdLens reads CCTV feeds and other venue sensors to estimate foot traffic zone by zone, hour by hour, so you can quote placements on real footfall instead of a flat rate card.
+      </p>
+      <div class="mt-9 flex flex-wrap items-center gap-4 reveal" style="transition-delay:560ms;">
+        <a href="#demo" class="btn-primary px-6 py-3 rounded-full text-sm font-medium">Book a demo</a>
+        <a href="#how" class="btn-secondary px-6 py-3 rounded-full text-sm font-medium border border-[var(--border)]">See how it works</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Product screenshot: macOS-style window chrome, wide cinematic crop, mask-wipe reveal -->
+  <div class="max-w-7xl mx-auto mt-16">
+    <div class="shot-wrap rounded-2xl overflow-hidden bg-[#0b0b0b] border border-white/10 flex flex-col">
+      <div class="flex items-center gap-2 px-4 py-2.5 bg-white/[0.04] border-b border-white/10 shrink-0">
+        <span class="w-3 h-3 rounded-full" style="background:#ff5f57;"></span>
+        <span class="w-3 h-3 rounded-full" style="background:#febc2e;"></span>
+        <span class="w-3 h-3 rounded-full" style="background:#28c840;"></span>
+      </div>
+      <img src="assets/dashboard.png" alt="CrowdLens dashboard showing a visitor flow heatmap and zone analytics for Orion Mall, Bangalore"
+        class="w-full h-auto block" style="aspect-ratio:1.9/1; object-fit:contain; background:#0b0b0b;" loading="lazy" decoding="async" width="2400" height="1263" />
+    </div>
+  </div>
+</section>
+
+<!-- PROBLEM -->
+<section class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="max-w-2xl">
+      <h2 class="font-display text-3xl sm:text-4xl font-medium tracking-tight leading-tight">Most venue ad rate cards are a guess wearing a spreadsheet.</h2>
+      <p class="mt-5 text-[var(--ink-muted)] text-lg leading-relaxed">
+        A screen by the main entrance and a screen next to the fire exit often sell for the same price, because nobody's actually counting who walks past either one, or when. That gap costs agencies money on the way in, and credibility on the way out.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="max-w-xl mb-16">
+      <p class="label mb-3">How it works</p>
+      <h2 class="font-display text-3xl sm:text-4xl font-medium tracking-tight">From footage to a defensible price, in three steps.</h2>
+    </div>
+    <div class="grid md:grid-cols-3 gap-10 md:gap-8 border-t border-[var(--border)] pt-10">
+      <div>
+        <div class="stat-mono text-sm text-[var(--ink-muted)] mb-4">01</div>
+        <h3 class="font-display text-xl font-medium mb-2">Capture</h3>
+        <p class="text-[var(--ink-muted)] leading-relaxed text-sm">CrowdLens plugs into existing CCTV, entry counters, and Wi-Fi or beacon data already installed in the venue. No new hardware to mount.</p>
+      </div>
+      <div>
+        <div class="stat-mono text-sm text-[var(--ink-muted)] mb-4">02</div>
+        <h3 class="font-display text-xl font-medium mb-2">Analyze</h3>
+        <p class="text-[var(--ink-muted)] leading-relaxed text-sm">Our models convert raw feeds into anonymized traffic counts per zone, broken down by hour, day of week, and season.</p>
+      </div>
+      <div>
+        <div class="stat-mono text-sm text-[var(--ink-muted)] mb-4">03</div>
+        <h3 class="font-display text-xl font-medium mb-2">Price</h3>
+        <p class="text-[var(--ink-muted)] leading-relaxed text-sm">CrowdLens turns those counts into a suggested rate per zone and time slot, so quotes are backed by numbers a client can check.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURE BENTO -->
+<section id="product" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="max-w-xl mb-16">
+      <p class="label mb-3">Product</p>
+      <h2 class="font-display text-3xl sm:text-4xl font-medium tracking-tight">Built for how ad space actually sells.</h2>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-12 gap-5">
+      <div class="spot md:col-span-7 glass rounded-2xl p-8 flex flex-col justify-between min-h-[280px]">
+        <div>
+          <h3 class="font-display text-2xl font-medium mb-3">Zone level heatmaps</h3>
+          <p class="text-[var(--ink-muted)] leading-relaxed max-w-sm">See traffic broken down by exact spot in the venue, not one footfall number for the whole building, but a reading for every entrance, aisle, and screen.</p>
+        </div>
+        <svg viewBox="0 0 300 90" class="w-full h-auto mt-6">
+          <circle cx="40" cy="45" r="26" fill="white" opacity="0.9" />
+          <circle cx="40" cy="45" r="40" fill="white" opacity="0.12" />
+          <circle cx="130" cy="30" r="16" fill="white" opacity="0.5" />
+          <circle cx="130" cy="30" r="28" fill="white" opacity="0.08" />
+          <circle cx="200" cy="60" r="10" fill="white" opacity="0.3" />
+          <circle cx="260" cy="35" r="12" fill="white" opacity="0.35" />
+          <circle cx="260" cy="35" r="22" fill="white" opacity="0.07" />
+        </svg>
+      </div>
+      <div class="spot md:col-span-5 glass rounded-2xl p-8 flex flex-col justify-between min-h-[280px]">
+        <div>
+          <h3 class="font-display text-2xl font-medium mb-3">Hour by hour curves</h3>
+          <p class="text-[var(--ink-muted)] leading-relaxed text-sm">Traffic by time of day and day of week, so a 7pm slot prices differently from a Tuesday morning.</p>
+        </div>
+        <svg viewBox="0 0 220 70" class="w-full h-auto mt-6">
+          <polyline points="0,55 30,50 60,35 90,40 120,20 150,10 180,18 220,8" fill="none" stroke="white" stroke-width="2" opacity="0.85" />
+        </svg>
+      </div>
+      <div class="spot md:col-span-4 glass rounded-2xl p-8 min-h-[200px]">
+        <h3 class="font-display text-xl font-medium mb-3">Rate recommendations</h3>
+        <p class="text-[var(--ink-muted)] leading-relaxed text-sm">A suggested price per zone and time slot that updates as traffic shifts, not a rate card fixed a year ago.</p>
+      </div>
+      <div class="spot md:col-span-4 glass rounded-2xl p-8 min-h-[200px]">
+        <h3 class="font-display text-xl font-medium mb-3">Works with what's already there</h3>
+        <p class="text-[var(--ink-muted)] leading-relaxed text-sm">Plugs into CCTV and counters already installed in the venue. No new cameras to mount.</p>
+      </div>
+      <div class="spot md:col-span-4 glass rounded-2xl p-8 min-h-[200px]">
+        <h3 class="font-display text-xl font-medium mb-3">Counts, not faces</h3>
+        <p class="text-[var(--ink-muted)] leading-relaxed text-sm">Anonymized traffic counts only. No facial recognition, no identity data. <a href="#privacy" class="underline underline-offset-2 hover:text-white">More below</a>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PRICING CURVE CHART -->
+<section id="pricing-curve" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto grid lg:grid-cols-2 gap-14 items-center">
+    <div>
+      <p class="label mb-3">The pricing curve</p>
+      <h2 class="font-display text-3xl sm:text-4xl font-medium tracking-tight leading-tight">Traffic moves through the day. Your rate card should too.</h2>
+      <p class="mt-5 text-[var(--ink-muted)] leading-relaxed">
+        Instead of one flat rate, CrowdLens maps expected traffic across the hours a screen or panel is live, so a 6 to 8pm slot at the main entrance can be quoted at what it's actually worth, and a slow 11am slot doesn't get priced the same way.
+      </p>
+      <!--
+      <div class="mt-8 flex flex-wrap gap-3">
+        <span class="label px-3 py-1.5 rounded-full border border-[var(--border)]">Off-peak · lower rate</span>
+        <span class="label px-3 py-1.5 rounded-full border border-[var(--border)] text-[var(--mid)]">Rising · standard rate</span>
+        <span class="label px-3 py-1.5 rounded-full text-[#050505] font-medium bg-white">Peak · premium rate</span>
+      </div>
+    </div>
+    -->
+    <div class="glass rounded-2xl p-6">
+      <svg viewBox="0 0 420 240" class="w-full h-auto">
+        <defs>
+          <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.22" />
+            <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+          </linearGradient>
+        </defs>
+        <line x1="30" y1="190" x2="400" y2="190" stroke="rgba(255,255,255,0.12)" stroke-width="1" />
+        <text x="30" y="210" font-family="General Sans" font-size="9" fill="#8B8B8F">08:00</text>
+        <text x="130" y="210" font-family="General Sans" font-size="9" fill="#8B8B8F">12:00</text>
+        <text x="230" y="210" font-family="General Sans" font-size="9" fill="#8B8B8F">16:00</text>
+        <text x="330" y="210" font-family="General Sans" font-size="9" fill="#8B8B8F">20:00</text>
+        <path d="M30,170 Q80,175 130,140 T230,110 Q280,60 330,45 Q365,55 400,70 L400,190 L30,190 Z" fill="url(#areaFill)" />
+        <path d="M30,170 Q80,175 130,140 T230,110 Q280,60 330,45 Q365,55 400,70" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" opacity="0.9" />
+        <circle cx="130" cy="140" r="3.5" fill="white" opacity="0.4" />
+        <circle cx="230" cy="110" r="4" fill="white" opacity="0.7" />
+        <circle cx="330" cy="45" r="5" fill="white" />
+        <text x="330" y="30" text-anchor="middle" font-family="General Sans" font-size="10" fill="white">peak</text>
+      </svg>
+      <p class="label mt-2">Main entrance · weekday traffic estimate</p>
+    </div>
+  </div>
+</section>
+
+<!-- PRIVACY -->
+<section id="privacy" class="py-24 px-6">
+  <div class="max-w-6xl mx-auto glass rounded-2xl p-10 md:p-14">
+    <div class="max-w-2xl">
+      <p class="label mb-3">Privacy, up front</p>
+      <h2 class="font-display text-3xl sm:text-4xl font-medium tracking-tight leading-tight">We count people. We don't identify them.</h2>
+      <p class="mt-5 text-[var(--ink-muted)] leading-relaxed">
+        CrowdLens processes footage to produce anonymized movement and headcount data per zone. No facial recognition, no identity matching, and no images are stored after processing. The output is numbers, not people.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section id="demo" class="py-28 px-6">
+  <div class="max-w-6xl mx-auto">
+    <div class="max-w-xl">
+      <h2 class="font-display text-3xl sm:text-4xl font-medium tracking-tight">See your own venue's traffic curve.</h2>
+      <p class="mt-4 text-[var(--ink-muted)] text-lg">We'll walk through a sample zone map and pricing curve using data close to your venue type. No setup required for the demo.</p>
+      <form class="mt-8 flex flex-col sm:flex-row gap-3 max-w-md" onsubmit="event.preventDefault(); this.querySelector('button').textContent='Request sent';">
+        <label class="sr-only" for="email-input">Work email</label>
+        <input id="email-input" type="email" required placeholder="you@agency.com"
+          class="flex-1 px-4 py-3 rounded-full glass text-sm focus:outline-none focus:ring-2 focus:ring-white/30 placeholder:text-[var(--ink-muted)]" />
+        <button type="submit" class="btn-primary px-6 py-3 rounded-full text-sm font-medium whitespace-nowrap">Book a demo</button>
+      </form>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="py-12 px-6 border-t border-[var(--border)]">
+  <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-[var(--ink-muted)]">
+    <div class="flex items-center text-white">
+      <img src="assets/CLDarkModeLogo.png" alt="CrowdLens" class="h-20 w-auto" loading="lazy" decoding="async" width="36" height="36" />
+    </div>
+    <p class="label">© 2026 CrowdLens. Traffic data, not facial data.</p>
+  </div>
+</footer>
+
+<script>
+// Scroll-intensified blurred nav (Linear-style)
+const headerEl = document.querySelector('header');
+window.addEventListener('scroll', () => {
+  if (window.scrollY > 40) headerEl.classList.add('scrolled');
+  else headerEl.classList.remove('scrolled');
+}, { passive: true });
+
+// Hero screenshot: trigger its own mask-wipe reveal shortly after page load, independent of scroll
+window.addEventListener('DOMContentLoaded', ()=>{
+  const shot = document.querySelector('.shot-wrap');
+  requestAnimationFrame(()=>{
+    setTimeout(()=> shot && shot.classList.add('in'), 900);
+  });
+});
+
+window.addEventListener('DOMContentLoaded', () => {
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.reveal').forEach(el => el.classList.add('in'));
+  });
+});
+
+// Spotlight cursor tracking on bento/step cards
+document.querySelectorAll('.spot').forEach(card=>{
+  card.addEventListener('mousemove', (e)=>{
+    const r = card.getBoundingClientRect();
+    card.style.setProperty('--mx', (e.clientX - r.left) + 'px');
+    card.style.setProperty('--my', (e.clientY - r.top) + 'px');
+  });
+});
+
+// Animated monochrome shader-style gradient background (kept as requested)
+(function(){
+  const canvas = document.getElementById('gradient-canvas');
+  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+  if(!gl){ canvas.style.background = 'radial-gradient(ellipse at 30% 20%, #1a1a1a, #040404 60%)'; return; }
+  function resize(){
+    canvas.width = window.innerWidth * Math.min(window.devicePixelRatio,1.5);
+    canvas.height = window.innerHeight * Math.min(window.devicePixelRatio,1.5);
+    gl.viewport(0,0,canvas.width,canvas.height);
+  }
+  window.addEventListener('resize', resize); resize();
+
+  const vsSource = 'attribute vec2 apos; void main(){ gl_Position = vec4(apos,0.0,1.0); }';
+  const fsSource = `
+    precision highp float;
+    uniform vec2 uresolution;
+    uniform float utime;
+    void main(){
+      vec2 uv = gl_FragCoord.xy / uresolution.xy;
+      vec2 p = uv * 2.0 - 1.0;
+      p.x *= uresolution.x / uresolution.y;
+      float t = utime * 0.04;
+      float n = sin(p.x*1.6 + t*2.0) + sin(p.y*1.9 - t*1.4) + sin((p.x+p.y)*1.3 + t*1.1);
+      n = n / 3.0 * 0.5 + 0.5;
+      float n2 = sin(p.x*2.5 - t*1.2) + sin(p.y*2.1 + t*0.7);
+      n = clamp(n + n2*0.15, 0.0, 1.0);
+      float vig = smoothstep(1.6,0.1,length(p));
+      float shade = mix(0.015, 0.16, n) * (0.5 + 0.5*vig);
+      gl_FragColor = vec4(vec3(shade), 1.0);
+    }`;
+  function compile(type, src){ const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; }
+  const vs = compile(gl.VERTEX_SHADER, vsSource);
+  const fs = compile(gl.FRAGMENT_SHADER, fsSource);
+  const program = gl.createProgram();
+  gl.attachShader(program, vs); gl.attachShader(program, fs); gl.linkProgram(program); gl.useProgram(program);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+  const posLoc = gl.getAttribLocation(program, 'apos');
+  gl.enableVertexAttribArray(posLoc);
+  gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+  const resLoc = gl.getUniformLocation(program, 'uresolution');
+  const timeLoc = gl.getUniformLocation(program, 'utime');
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let start = performance.now();
+  function frame(now){
+    const t = reducedMotion ? 8.0 : (now - start)/1000;
+    gl.uniform2f(resLoc, canvas.width, canvas.height);
+    gl.uniform1f(timeLoc, t);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    if(!reducedMotion) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
